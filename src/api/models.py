@@ -24,6 +24,42 @@ from pydantic import BaseModel, ConfigDict, Field
 from src.models.conversation import RetrievedDoc, TokenUsage  # noqa: F401  (re-export)
 
 
+class TurnRequest(BaseModel):
+    """Request body for `POST /api/turns`.
+
+    `session_id` lives in the body (not the URL path) so it doesn't leak into
+    server access logs, browser history, referrer headers, or analytics. The
+    same shape extends cleanly to Phase 1's Bearer-token auth.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str = Field(
+        ...,
+        min_length=1,
+        description="Server-generated session ID returned by POST /api/sessions.",
+    )
+    query: str = Field(..., min_length=1, description="User's question or message.")
+
+
+class CreateSessionResponse(BaseModel):
+    """Response body for `POST /api/sessions`.
+
+    The server, not the client, generates `session_id`. This eliminates the
+    collision risk that arises when the same user opens the app on multiple
+    devices (phone + tablet + web) and lets the backend control the ID
+    format (currently `sess_<12-hex>` from UUID4).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str
+    created_at: datetime
+    user_id: str = "local"
+    title: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class TurnResponse(BaseModel):
     """A single conversation turn returned over the wire.
 

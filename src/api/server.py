@@ -28,6 +28,7 @@ Architectural decisions
 
 from __future__ import annotations
 
+import uuid
 from functools import lru_cache
 from typing import Final
 
@@ -38,7 +39,9 @@ from src.agent.conversation_manager import ConversationManager
 from src.agent.orchestrator import KnowledgeAgent
 from src.agent.tools import build_default_tools
 from src.api.models import (
+    CreateSessionResponse,
     SessionMetadata,
+    TurnRequest,
     TurnResponse,
     TurnsListResponse,
 )
@@ -93,23 +96,38 @@ def _get_agent() -> KnowledgeAgent:
     return KnowledgeAgent(build_default_tools(), settings=settings, verbose=False)
 
 
-def _get_or_create_manager(session_id: str) -> ConversationManager:
-    """Return the `ConversationManager` for this session, creating if needed.
+def _generate_session_id() -> str:
+    """Generate a fresh, server-side session ID.
 
-    The session ID is supplied by the *client* (path param), which differs
-    from the CLI's auto-generated IDs. We override the dataclass default by
-    passing `session=Session(id=session_id)`.
+    Format: ``sess_<12 hex chars>`` taken from UUID4.
+
+    *Why server-generated.* Client-generated IDs (e.g. timestamps or
+    locally-chosen strings) collide when the same user opens the app on
+    multiple devices in the same second. UUID4 has ~5.3e12 chance of
+    collision over the truncated 12-hex window, which is fine for the
+    Phase 0 single-process store and trivially extends to a UUID column
+    in Phase 1's SQLite schema. Owning the format on the server also
+    means Phase 1's Bearer-token auth can rotate or scope IDs without a
+    client change.
     """
-    mgr = _SESSIONS.get(session_id)
-    if mgr is None:
-        settings = get_settings()
-        mgr = ConversationManager(
-            agent=_get_agent(),
-            settings=settings,
-            session=Session(id=session_id),
-        )
-        _SESSIONS[session_id] = mgr
-        logger.info("Created new session: %s", session_id)
+    return f"sess_{uuid.uuid4().hex[:12]}"
+
+
+def _create_manager(session_id: str) -> ConversationManager:
+    """Register a brand-new `ConversationManager` under `session_id`.
+
+    Phase 0 sessions are explicitly created via ``POST /api/sessions`` —
+    they are no longer auto-created on the first turn. This function is
+    the single place that mutates `_SESSIONS` to add an entry.
+    """
+    settings = get_settings()
+    mgr = ConversationManager(
+        agent=_get_agent(),
+        settings=settings,
+        session=Session(id=session_id),
+    )
+    _SESSIONS[session_id] = mgr
+    logger.info("Created new session: %s", session_id)
     return mgr
 
 
@@ -150,32 +168,68 @@ def health() -> dict[str, str]:
 
 
 @app.post(
-    "/api/sessions/{session_id}/turns",
+    "/api/sessions",
+    response_model=CreateSessionResponse,
+    status_code=201,
+    tags=["conversation"],
+    summary="Create a new conversation session",
+)
+def post_session() -> CreateSessionResponse:
+    """Create a new session and return its server-generated ID.
+
+    The client MUST call this before posting any turns; the ID is then
+    sent back in the body of ``POST /api/turns``. Server-generated IDs
+    eliminate the multi-device collision risk that arises with
+    client-chosen identifiers and let the backend control the ID format
+    (currently ``sess_<12-hex>`` from UUID4).
+
+    A `RuntimeError` from `_get_agent()` (e.g. missing API key) becomes a
+    500 here — we surface infrastructure problems eagerly so the caller
+    knows the session it just got won't be usable.
+    """
+    session_id = _generate_session_id()
+    try:
+        manager = _create_manager(session_id)
+    except RuntimeError as e:
+        logger.exception("Failed to initialize agent for new session %s", session_id)
+        raise HTTPException(status_code=500, detail=f"Error creating session: {e}") from e
+
+    session = manager.session
+    return CreateSessionResponse(
+        session_id=session.id,
+        created_at=session.created_at,
+        user_id=session.user_id,
+        title=session.title,
+        metadata=session.metadata,
+    )
+
+
+@app.post(
+    "/api/turns",
     response_model=TurnResponse,
     tags=["conversation"],
     summary="Send a message and get an answer",
 )
-def post_turn(
-    session_id: str = Path(..., description="Stable conversation ID supplied by the client."),
-    query: str = Query(..., description="The user's question or message."),
-) -> TurnResponse:
-    """Process one user turn. Creates the session implicitly on first call.
+def post_turn(request: TurnRequest) -> TurnResponse:
+    """Process one user turn against an EXISTING session.
+
+    `session_id` is taken from the JSON body, NOT the URL path, so it does
+    not leak into access logs, browser history, or referrer headers. The
+    same body-shape extends to Phase 1's Bearer-token auth.
+
+    Sessions are no longer auto-created here — call ``POST /api/sessions``
+    first. An unknown `session_id` returns 404 (via `_get_manager_or_404`).
 
     Returns 200 even if the agent itself fails — the failure is captured in
     `metadata.errored` so the conversation can continue. Only structural
     problems (missing API key, etc.) produce a 5xx.
     """
-    # FastAPI already 422s on a missing `query`, but an *empty* string is
-    # still technically present — guard explicitly to match the spec.
-    if not query.strip():
-        raise HTTPException(status_code=400, detail="query parameter is required")
+    # `TurnRequest` enforces min_length=1 on both fields, so no manual
+    # empty-string guard is needed here.
+    session_id = request.session_id
+    query = request.query
 
-    try:
-        manager = _get_or_create_manager(session_id)
-    except RuntimeError as e:
-        # E.g. agent construction failed because GOOGLE_API_KEY is missing.
-        logger.exception("Failed to initialize agent for session %s", session_id)
-        raise HTTPException(status_code=500, detail=f"Error processing turn: {e}") from e
+    manager = _get_manager_or_404(session_id)
 
     logger.info(
         "POST /turns session=%s turn_n=%d query=%r",
