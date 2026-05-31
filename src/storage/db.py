@@ -31,7 +31,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import Lock
+from threading import RLock
 from typing import Any
 
 from src.models.conversation import ConversationTurn
@@ -102,7 +102,7 @@ class SessionManager:
         # WAL: lets readers run during a write. Cheap; opt-in once per file.
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_SCHEMA)
-        self._write_lock = Lock()
+        self._write_lock = RLock()
         logger.info("SessionManager opened db=%s", self._db_path)
 
     # ─── Mutations ─────────────────────────────────────────────
@@ -130,38 +130,50 @@ class SessionManager:
         """
         payload = turn.model_dump(mode="json")
         with self._write_lock:
-            self._conn.execute(
-                "INSERT INTO conversation_turns "
-                "(id, session_id, turn_number, user_message, agent_response, "
-                " retrieved_docs, tool_calls, tool_results, token_usage, "
-                " metadata, timestamp) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    turn.id,
-                    session_id,
-                    turn.turn_number,
-                    turn.user_message,
-                    turn.agent_response,
-                    json.dumps(payload["retrieved_docs"]),
-                    json.dumps(payload["tool_calls"]),
-                    json.dumps(payload["tool_results"]),
-                    json.dumps(payload["token_usage"]),
-                    json.dumps(payload["metadata"]),
-                    payload["timestamp"],
-                ),
-            )
-            self._conn.execute(
-                "UPDATE sessions SET updated_at = ? WHERE id = ?",
-                (payload["timestamp"], session_id),
-            )
+            self._conn.execute("BEGIN")
+            try:
+                self._conn.execute(
+                    "INSERT INTO conversation_turns "
+                    "(id, session_id, turn_number, user_message, agent_response, "
+                    " retrieved_docs, tool_calls, tool_results, token_usage, "
+                    " metadata, timestamp) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        turn.id,
+                        session_id,
+                        turn.turn_number,
+                        turn.user_message,
+                        turn.agent_response,
+                        json.dumps(payload["retrieved_docs"]),
+                        json.dumps(payload["tool_calls"]),
+                        json.dumps(payload["tool_results"]),
+                        json.dumps(payload["token_usage"]),
+                        json.dumps(payload["metadata"]),
+                        payload["timestamp"],
+                    ),
+                )
+                self._conn.execute(
+                    "UPDATE sessions SET updated_at = ? WHERE id = ?",
+                    (payload["timestamp"], session_id),
+                )
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
 
     async def delete_session(self, session_id: str) -> None:
         """Hard-delete a session and all its turns. Silent no-op if missing."""
         with self._write_lock:
-            self._conn.execute(
-                "DELETE FROM conversation_turns WHERE session_id = ?", (session_id,)
-            )
-            self._conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+            self._conn.execute("BEGIN")
+            try:
+                self._conn.execute(
+                    "DELETE FROM conversation_turns WHERE session_id = ?", (session_id,)
+                )
+                self._conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
         logger.info("session deleted id=%s", session_id)
 
     # ─── Reads ─────────────────────────────────────────────────
@@ -220,12 +232,17 @@ class SessionManager:
         `user_id`, return it as-is. Otherwise create a fresh session and
         return its new ID — we never invent rows for unknown session IDs
         (that would let any caller squat on any ID).
+
+        Note: The check-and-create is wrapped in a lock to prevent race
+        conditions where two concurrent calls could both observe missing
+        session and create duplicates.
         """
-        if session_id:
-            existing = await self.load_session(session_id)
-            if existing is not None and existing["user_id"] == user_id:
-                return session_id
-        return await self.create_session(user_id)
+        with self._write_lock:
+            if session_id:
+                existing = await self.load_session(session_id)
+                if existing is not None and existing["user_id"] == user_id:
+                    return session_id
+            return await self.create_session(user_id)
 
     # ─── Lifecycle ─────────────────────────────────────────────
 
