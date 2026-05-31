@@ -1,93 +1,165 @@
-"""Agent tools (Phase 0 stubs).
+"""Agent tools — Phase 1 RAG stubs.
 
-Why stubs?
-----------
-The acceptance criteria for Task 0.4 is "tool calling works", not "tools
-return real RAG results". By defining the *interfaces* now with CrewAI's
-`BaseTool` Pydantic-args schema, Phase 1 only needs to replace the body of
-each `_run` method — no changes to agents, tasks, orchestrator, or CLI.
+Two stateless tool functions the CrewAI agents call:
 
-Each tool:
-* Has a Pydantic input schema so the LLM is forced to pass valid args.
-* Returns a short string (CrewAI tool results are stringly-typed in the
-  prompt). Structured data is logged separately for the audit trail.
+* `retrieve(query, top_k)` — search the vector store (Phase 1.3 fills in).
+* `cite(chunk_id, excerpt)` — format a citation (Phase 1.4 fills in).
+
+Each tool has TWO public surfaces:
+
+1. The pure async function — what scripts, evals, REST handlers, and
+   Phase 1+ code import directly.
+2. The `@tool(...)`-decorated sync wrapper — what CrewAI's `Agent` sees.
+
+Keeping the async function as the canonical implementation means Phase 1.3
+(real retriever) can wire up I/O without touching the wrapper. The wrapper
+exists purely to bridge between CrewAI's sync tool-calling convention and
+our async core, and to shape the JSON the LLM ultimately reads.
 """
 
 from __future__ import annotations
 
-from typing import Type
+import asyncio
+import atexit
+import json
+from collections.abc import Coroutine
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, TypeVar
 
-from crewai.tools import BaseTool
-from pydantic import BaseModel, Field
+from crewai.tools import BaseTool, tool
 
+from src.models.document import DocumentChunk, RetrievedDoc  # noqa: F401 (re-exported)
 from src.utils import get_logger
 
 logger = get_logger(__name__)
+_async_bridge_executor = ThreadPoolExecutor(max_workers=1)
+atexit.register(_async_bridge_executor.shutdown, wait=False, cancel_futures=True)
+_T = TypeVar("_T")
 
 
-# ─── retrieve ────────────────────────────────────────────────────────────
-
-class RetrieveInput(BaseModel):
-    query: str = Field(..., description="Natural-language search query.")
-    top_k: int = Field(default=5, ge=1, le=20, description="Number of docs to return.")
+# ─── Pure async tool implementations ─────────────────────────────────────
 
 
-class RetrieveTool(BaseTool):
-    """Search the knowledge base for documents relevant to a query.
+async def retrieve(query: str, top_k: int = 5) -> list[RetrievedDoc]:
+    """Search the knowledge base for documents relevant to `query`.
 
-    Phase 0: returns a placeholder so the agent loop can be exercised without
-    Chroma being populated yet. Phase 1 wires this to `src.rag.retriever`.
+    Phase 0 stub — returns `[]`. Phase 1.3 wires this to the embedding
+    provider + `ChromaVectorStore.search()`. The signature is the
+    long-term contract; only the body changes.
+
+    Args:
+        query: Natural-language question to search for.
+        top_k: Number of results to return (1-10). Validation lives in
+            the `@tool` wrapper / Phase 1.3 implementation, not here, so
+            callers can experiment freely.
     """
-
-    name: str = "retrieve"
-    description: str = (
-        "Search the user's personal knowledge base. Use this whenever the "
-        "user asks a question that might be answered by their documents. "
-        "Returns a numbered list of excerpts with sources."
-    )
-    args_schema: Type[BaseModel] = RetrieveInput
-
-    def _run(self, query: str, top_k: int = 5) -> str:
-        logger.info("retrieve(query=%r, top_k=%d) [Phase 0 stub]", query, top_k)
-        # Phase 1 will replace this with: RAGRetriever().retrieve(query, top_k)
-        return (
-            "[Phase 0 stub] The retrieval tool is not yet connected to a "
-            "vector store. Tell the user that no documents have been "
-            "ingested yet and offer to answer from general knowledge instead."
-        )
+    logger.info("retrieve(query=%r, top_k=%d) [Phase 0 stub]", query[:80], top_k)
+    # Phase 1.3 implementation:
+    #   embedding = await get_embedding_provider().embed_query(query)
+    #   return await get_vector_store().search(embedding, top_k=top_k)
+    return []
 
 
-# ─── cite ────────────────────────────────────────────────────────────────
+async def cite(chunk_id: str, excerpt: str | None = None) -> str:
+    """Format a citation for `chunk_id`.
 
-class CiteInput(BaseModel):
-    source: str = Field(..., description="File name or URL of the source.")
-    excerpt: str = Field(..., description="The exact text being cited.")
+    Phase 0 stub — returns a `[citation:<chunk_id>]` placeholder so the
+    agent's response still parses end-to-end. Phase 1.4 will look up the
+    chunk's metadata (source, page, section) and format it as
+    `"[N] source"` or `"[N] source | excerpt"`.
 
-
-class CiteTool(BaseTool):
-    """Format a citation for inclusion in the answer."""
-
-    name: str = "cite"
-    description: str = (
-        "Format a citation to a retrieved document. Call once per source "
-        "before mentioning it in your answer."
-    )
-    args_schema: Type[BaseModel] = CiteInput
-
-    def _run(self, source: str, excerpt: str) -> str:
-        logger.info("cite(source=%r) [%d chars]", source, len(excerpt))
-        short = excerpt[:80].replace("\n", " ")
-        return f"[source: {source}] \"{short}…\""
+    Args:
+        chunk_id: ID of the chunk to cite (from `retrieve` results).
+        excerpt: Optional text to include in the citation. Trimmed to
+            80 chars in the stub.
+    """
+    logger.info("cite(chunk_id=%r, has_excerpt=%s) [Phase 0 stub]", chunk_id, bool(excerpt))
+    if excerpt:
+        return f"[citation:{chunk_id} | {excerpt[:80]}]"
+    return f"[citation:{chunk_id}]"
 
 
-# ─── factory ─────────────────────────────────────────────────────────────
+# ─── CrewAI-facing sync wrappers ─────────────────────────────────────────
 
-def build_default_tools() -> dict[str, BaseTool]:
-    """Construct the default tool registry used by Phase 0 agents.
 
-    Returns a name→tool dict so `KnowledgeAgents` can pick tools per agent.
+def _retrieved_for_agent(doc: RetrievedDoc) -> dict[str, Any]:
+    """Reshape a `RetrievedDoc` for the agent-facing JSON.
+
+    The agent sees the score under the `similarity_score` key the spec
+    documents. The internal model uses `score` so the FastAPI
+    `TurnResponse` JSON contract stays stable; the wrapper is the one
+    place that translates.
     """
     return {
-        "retrieve": RetrieveTool(),
-        "cite": CiteTool(),
+        "chunk_id": doc.chunk_id,
+        "text": doc.text,
+        "source": doc.source,
+        "similarity_score": doc.score,
+        "metadata": doc.metadata,
+    }
+
+
+def _run_sync(coro: Coroutine[Any, Any, _T]) -> _T:
+    """Run coroutine from sync code, including when an event loop already exists."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    return _async_bridge_executor.submit(asyncio.run, coro).result()
+
+
+@tool("retrieve")
+def tool_retrieve(query: str, top_k: int = 5) -> str:
+    """Search the user's knowledge base for documents relevant to a question.
+
+    Use this whenever the user asks something that might be answered by
+    their personal documents. The result is a JSON array of objects with
+    `chunk_id`, `text`, `source`, `similarity_score`, and `metadata`.
+    Quote the `text` directly when you reference a result and pass the
+    `chunk_id` to the `cite` tool.
+
+    Args:
+        query: A focused, keyword-rich search query (not a full sentence).
+        top_k: How many results to return (1-10, default 5).
+
+    Returns:
+        JSON-encoded list of retrieved documents.
+    """
+    docs = _run_sync(retrieve(query=query, top_k=top_k))
+    return json.dumps([_retrieved_for_agent(d) for d in docs])
+
+
+@tool("cite")
+def tool_cite(chunk_id: str, excerpt: str = "") -> str:
+    """Format a citation for a retrieved document chunk.
+
+    Call once per source you reference. Embed the returned string inline
+    in your answer, e.g. `"... improves recall [1] ..."`.
+
+    Args:
+        chunk_id: The chunk ID from a `retrieve` result.
+        excerpt: Optional excerpt to highlight. Pass `""` to omit.
+
+    Returns:
+        Citation string ready to embed in the final answer.
+    """
+    # `excerpt=""` means "no excerpt"; we normalize to `None` before
+    # calling the async core so the stub's branch is exercised correctly.
+    return _run_sync(cite(chunk_id=chunk_id, excerpt=excerpt or None))
+
+
+# ─── Tool registry ────────────────────────────────────────────────────────
+
+
+def build_default_tools() -> dict[str, BaseTool]:
+    """Tool registry consumed by `KnowledgeAgents`.
+
+    Returns CrewAI tool objects keyed by name. `KnowledgeAgents` picks
+    them up via `tools.get("retrieve")` / `tools.get("cite")`, so adding
+    a new tool means: add a `@tool` definition above, add it to the
+    return dict here, and reference its key in `KnowledgeAgents`.
+    """
+    return {
+        "retrieve": tool_retrieve,
+        "cite": tool_cite,
     }
