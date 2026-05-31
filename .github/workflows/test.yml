@@ -1,0 +1,102 @@
+name: tests
+
+# ─── Triggers ──────────────────────────────────────────────────────────────
+# Run on every push to any branch and on every PR. We intentionally do NOT
+# filter by path — touching pyproject.toml or workflow files should also
+# trigger a run to catch dependency / config breakage early.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+# Cancel any in-progress run for the same ref when a new commit lands.
+# Keeps the CI bill reasonable on busy branches.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least-privilege defaults. The codecov step bumps `pull-requests` write
+# itself if/when it needs to comment.
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Unit tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      # `fail-fast: false` so a 3.11 failure doesn't hide a 3.12 problem.
+      fail-fast: false
+      matrix:
+        # Project minimum is 3.11 (see pyproject.toml `requires-python`).
+        # 3.12 is the current default toolchain; pin both to catch syntax
+        # / typing differences between them. Drop 3.12 if CI minutes get
+        # expensive — it's nice-to-have, not required.
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v2
+        with:
+          # Cache uv's package downloads keyed off pyproject.toml + uv.lock
+          # so subsequent runs install in seconds instead of minutes.
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      - name: Set Python version
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        # `--extra dev` pulls in pytest + pytest-cov + pytest-asyncio.
+        # `--frozen` makes CI install the exact versions pinned in the
+        # committed `uv.lock` and fails loudly if the lockfile is stale
+        # — i.e. if someone edited pyproject.toml without rerunning
+        # `uv lock`. That's the desired behavior for reproducible runs.
+        run: uv sync --extra dev --frozen
+
+      - name: Run unit tests with coverage
+        # Path filter (`tests/unit/`) + the `integration` marker filter is
+        # belt-and-suspenders: if someone misplaces an integration test
+        # under tests/unit/, the `-m "not integration"` still skips it.
+        #
+        # Coverage is reported but NOT enforced as a hard gate. Phase 0's
+        # >80% target is a goal; failing CI on coverage churn is more
+        # disruptive than useful at this stage. Switch to
+        # `--cov-fail-under=80` once Phase 1 stabilizes the modules we
+        # care about.
+        run: |
+          uv run pytest tests/unit/ \
+            -v \
+            -m "not integration" \
+            --cov=src \
+            --cov-report=xml \
+            --cov-report=term-missing
+
+      - name: Upload coverage XML as artifact
+        # Always upload (even on test failure) so failed runs are still
+        # easy to inspect via the Actions UI.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.python-version }}
+          path: coverage.xml
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload coverage to Codecov
+        # Optional. For public repos this works token-less; for private
+        # repos set `CODECOV_TOKEN` in repo secrets. `continue-on-error`
+        # so a Codecov outage never blocks a merge.
+        if: matrix.python-version == '3.12'
+        continue-on-error: true
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          flags: unit
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
