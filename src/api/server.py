@@ -83,17 +83,25 @@ _SESSIONS: Final[dict[str, ConversationManager]] = {}
 def _get_agent() -> KnowledgeAgent:
     """Build the shared `KnowledgeAgent` exactly once (process-wide).
 
-    Doing this lazily (rather than at module import) keeps the server
-    bootable without `GOOGLE_API_KEY` set, which is helpful when only
-    `/docs` is being explored.
+    Lazy construction so the server boots and `/docs` works even if the
+    configured provider is misconfigured — the failure surfaces on the
+    first turn. Provider-specific key checks live in `agents._build_llm`,
+    so this function is provider-agnostic.
     """
     settings = get_settings()
-    if not settings.has_gemini:
-        raise RuntimeError(
-            "GOOGLE_API_KEY is not set. Configure your .env before posting turns."
-        )
     settings.ensure_storage_dirs()
-    return KnowledgeAgent(build_default_tools(), settings=settings, verbose=False)
+    try:
+        agent = KnowledgeAgent(build_default_tools(), settings=settings, verbose=False)
+    except RuntimeError:
+        # `_build_llm` raises with a provider-specific message; let it bubble.
+        logger.exception("Failed to initialize KnowledgeAgent")
+        raise
+    logger.info(
+        "KnowledgeAgent initialized (LLM provider=%s, embeddings provider=%s)",
+        settings.llm_provider,
+        settings.embedding_provider,
+    )
+    return agent
 
 
 def _generate_session_id() -> str:

@@ -34,19 +34,31 @@ logger = get_logger(__name__)
 
 
 def _build_llm(settings: Settings) -> LLM:
-    """Construct the CrewAI LLM wrapper around Gemini.
+    """Construct the CrewAI LLM wrapper for the configured provider.
 
-    CrewAI 0.5x routes LLM calls through LiteLLM, which auto-detects the
-    provider from the model prefix (`gemini/...`). We pass the API key
-    explicitly rather than relying on env-var sniffing so this stays
-    testable.
+    All provider dispatch (model-string assembly, key extraction,
+    validation) is delegated to `factory.get_litellm_model_and_key()` so
+    this function stays a thin adapter. `settings` is kept in the
+    signature for backwards-compat with callers, even though we read it
+    indirectly through the factory now.
+
+    Temperature is intentionally low (0.2) — this is a grounded-QA agent,
+    not a creative writer. The per-provider classes in `src.providers`
+    use 0.7 for general-purpose use.
     """
-    return LLM(
-        model=settings.pka_llm_model,
-        api_key=settings.google_api_key.get_secret_value(),
-        # temperature kept low — this is a grounded-QA agent, not a creative one.
-        temperature=0.2,
-    )
+    # Local import: `src.providers.factory` imports `src.config`, which is
+    # safe to import eagerly, but keeping this lazy means a future cycle
+    # (e.g. the factory importing from `src.agent`) won't blow up at
+    # module load.
+    from src.providers.factory import get_litellm_model_and_key
+
+    try:
+        model, api_key = get_litellm_model_and_key()
+    except RuntimeError as e:
+        logger.error("Failed to configure LLM provider: %s", e)
+        raise
+
+    return LLM(model=model, api_key=api_key, temperature=0.2)
 
 
 class KnowledgeAgents:

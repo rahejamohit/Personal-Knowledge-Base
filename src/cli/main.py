@@ -56,12 +56,11 @@ def chat(
     configure_logging()
     settings = get_settings()
 
-    if not settings.has_gemini:
-        console.print(
-            "[red]GOOGLE_API_KEY is not set.[/red] Copy `env.example` to "
-            "`.env` and add your key. See README.md."
-        )
-        raise typer.Exit(code=1)
+    _validate_provider_or_exit(settings)
+    console.print(
+        f"[dim]Using providers: LLM={settings.llm_provider}, "
+        f"embeddings={settings.embedding_provider}[/dim]\n"
+    )
 
     settings.ensure_storage_dirs()
 
@@ -118,6 +117,51 @@ def chat(
                 f"{turn.token_usage.total_tokens} tokens · "
                 f"{turn.metadata.get('latency_ms', 0):.0f}ms[/dim]\n"
             )
+
+
+def _validate_provider_or_exit(settings) -> None:
+    """Fail fast with a friendly message if the configured LLM provider
+    is missing credentials or unreachable.
+
+    We check only the LLM provider here, not the embedding provider, since
+    Phase 0 doesn't exercise embeddings yet — Phase 1's ingestion command
+    will add its own check.
+    """
+    provider = settings.llm_provider
+
+    if provider == "ollama":
+        if not settings.has_ollama:
+            console.print(
+                "[red]Ollama LLM provider is not reachable.[/red]\n"
+                f"Tried [cyan]{settings.ollama_base_url}[/cyan]. "
+                "Start it with: [bold]ollama serve[/bold]"
+            )
+            raise typer.Exit(code=1)
+        return
+
+    if provider == "gemini":
+        if not settings.has_gemini:
+            console.print(
+                "[red]Gemini provider selected but GOOGLE_API_KEY is not set.[/red]\n"
+                "Copy `env.example` to `.env` and add your key, "
+                "or switch [bold]LLM_PROVIDER[/bold] to `ollama`."
+            )
+            raise typer.Exit(code=1)
+        return
+
+    if provider == "openai":
+        if not settings.has_openai:
+            console.print(
+                "[red]OpenAI provider selected but OPENAI_API_KEY is not set.[/red]\n"
+                "Copy `env.example` to `.env` and add your key, "
+                "or switch [bold]LLM_PROVIDER[/bold] to `ollama`."
+            )
+            raise typer.Exit(code=1)
+        return
+
+    # Pydantic's Literal type makes this unreachable, but keep a clear msg.
+    console.print(f"[red]Unknown LLM_PROVIDER: {provider!r}[/red]")
+    raise typer.Exit(code=1)
 
 
 def _print_welcome(session_id: str) -> None:

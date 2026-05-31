@@ -16,9 +16,12 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+ProviderName = Literal["ollama", "gemini", "openai"]
 
 
 class Settings(BaseSettings):
@@ -33,16 +36,64 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # ─── Provider selection ───────────────────────────────
+    # Chosen at runtime via env (`LLM_PROVIDER=ollama|gemini|openai`).
+    # Defaults to `ollama` so a fresh checkout works without any cloud
+    # credentials — `ollama serve` on localhost is all that's needed.
+    llm_provider: ProviderName = Field(
+        default="ollama",
+        description="Which LLM backend the agent talks to.",
+    )
+    embedding_provider: ProviderName = Field(
+        default="ollama",
+        description="Which embedding backend Phase 1 RAG will use.",
+    )
+
     # ─── API keys ─────────────────────────────────────────
-    # Required for the agent loop. Marked SecretStr so the value won't leak
-    # into logs / `repr(settings)` output.
+    # Required only when the matching provider is selected. Marked SecretStr
+    # so the value won't leak into logs / `repr(settings)` output.
     google_api_key: SecretStr = Field(
         default=SecretStr(""),
-        description="Google AI Studio API key for Gemini.",
+        description="Google AI Studio API key (required when llm/embedding_provider=gemini).",
     )
     openai_api_key: SecretStr = Field(
         default=SecretStr(""),
-        description="OpenAI API key (used only for embeddings in Phase 1).",
+        description="OpenAI API key (required when llm/embedding_provider=openai).",
+    )
+
+    # ─── Ollama configuration ─────────────────────────────
+    # Local-first defaults. `nomic-embed-text` emits 768-d vectors.
+    ollama_base_url: str = Field(
+        default="http://localhost:11434",
+        description="Base URL for the local Ollama server.",
+    )
+    ollama_llm_model: str = Field(
+        default="mistral",
+        description="Ollama LLM model tag (e.g. `mistral`, `llama3.2`).",
+    )
+    ollama_embedding_model: str = Field(
+        default="nomic-embed-text",
+        description="Ollama embedding model tag.",
+    )
+
+    # ─── Gemini configuration ─────────────────────────────
+    gemini_llm_model: str = Field(
+        default="gemini-2.0-flash",
+        description="Google Gemini model name (no provider prefix).",
+    )
+    gemini_embedding_model: str = Field(
+        default="models/embedding-001",
+        description="Google embedding model identifier.",
+    )
+
+    # ─── OpenAI configuration ─────────────────────────────
+    openai_llm_model: str = Field(
+        default="gpt-4o-mini",
+        description="OpenAI chat model name.",
+    )
+    openai_embedding_model: str = Field(
+        default="text-embedding-3-small",
+        description="OpenAI embedding model name.",
     )
 
     # ─── Model selection ──────────────────────────────────
@@ -91,6 +142,24 @@ class Settings(BaseSettings):
     @property
     def has_openai(self) -> bool:
         return bool(self.openai_api_key.get_secret_value())
+
+    @property
+    def has_ollama(self) -> bool:
+        """Cheap reachability probe for the local Ollama server.
+
+        Imports `requests` lazily so that callers who never invoke this
+        property don't pay the import cost (and so we don't add a hard
+        dependency on `requests` for non-Ollama setups, even though it's
+        in `pyproject.toml`).
+        """
+        try:
+            import requests  # local import — see docstring
+        except ImportError:
+            return False
+        try:
+            return requests.get(f"{self.ollama_base_url}/api/tags", timeout=2).ok
+        except requests.RequestException:
+            return False
 
     def ensure_storage_dirs(self) -> None:
         """Create local storage directories if they don't exist yet.
