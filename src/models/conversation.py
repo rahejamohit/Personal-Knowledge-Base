@@ -20,7 +20,14 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, computed_field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    NonNegativeInt,
+    computed_field,
+    model_validator,
+)
 
 from src.models.tool_calls import ToolCall, ToolResult
 
@@ -32,6 +39,22 @@ class TokenUsage(BaseModel):
 
     prompt_tokens: NonNegativeInt = 0
     completion_tokens: NonNegativeInt = 0
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_computed_total(cls, data: Any) -> Any:
+        """Strip `total_tokens` from input dicts before validation.
+
+        Why: `total_tokens` is a `@computed_field`, so `model_dump()`
+        emits it into the serialized JSON. Round-tripping that JSON back
+        through `model_validate_json()` would then fail under
+        `extra="forbid"` because the computed key isn't a real input
+        field. Dropping it here is a surgical fix — typos on
+        `prompt_tokens`/`completion_tokens` are still rejected loudly.
+        """
+        if isinstance(data, dict) and "total_tokens" in data:
+            return {k: v for k, v in data.items() if k != "total_tokens"}
+        return data
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -51,6 +74,12 @@ class RetrievedDoc(BaseModel):
 
     Stored verbatim on the turn so we can later see exactly what the agent
     was shown, even if the underlying chunk is re-embedded or deleted.
+
+    Field naming note: this model exposes `score` (kept for the FastAPI
+    `TurnResponse` JSON contract) AND a read-only `similarity_score`
+    property for new code that prefers the longer name. `metadata` carries
+    the originating chunk's metadata so callers can show e.g. page numbers
+    in citations.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -59,8 +88,17 @@ class RetrievedDoc(BaseModel):
     doc_id: str
     source: str = Field(..., description="Origin file/URL — used for citations.")
     text: str = Field(..., description="The excerpt actually shown to the LLM.")
-    score: float = Field(..., description="Similarity score from the vector store.")
+    score: float = Field(..., description="Similarity in [0, 1] (1 = identical).")
     rank: NonNegativeInt = Field(..., description="0-indexed rank within this turn's results.")
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Flat metadata from the originating chunk (page, section, ...).",
+    )
+
+    @property
+    def similarity_score(self) -> float:
+        """Alias for `score`. Provided for code that prefers the longer name."""
+        return self.score
 
 
 class ConversationTurn(BaseModel):

@@ -49,6 +49,10 @@ class DocumentChunk(BaseModel):
 
     `embedding` is optional because the chunker produces chunks *before* the
     embedding step. The vector store layer fills it in.
+
+    `created_at` is filled in automatically — useful when comparing which
+    chunks were live in the index for a given conversation turn (Phase 2
+    audit/replay).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -62,3 +66,10 @@ class DocumentChunk(BaseModel):
         description="Embedding vector — populated after the embedding step.",
     )
     metadata: DocumentMetadata
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+# Re-export so callers can `from src.models.document import RetrievedDoc` —
+# the type is defined in conversation.py because `ConversationTurn` references
+# it; here we just expose it under the more natural "document" namespace.
+from src.models.conversation import RetrievedDoc  # noqa: E402, F401  (re-export)

@@ -134,6 +134,21 @@ class Settings(BaseSettings):
         description="Recent turns to include verbatim before summarization (Phase 2).",
     )
 
+    # ─── Phase 1: ingestion chunking knobs ────────────────
+    # Token-budgeted chunking. 512/50 is the same default the architecture
+    # doc recommends — large enough that a chunk is a meaningful unit of
+    # text, small enough to keep ~5 chunks within a single Gemini call.
+    chunk_size: int = Field(
+        default=512,
+        ge=64,
+        description="Target tokens per chunk during ingestion.",
+    )
+    chunk_overlap: int = Field(
+        default=50,
+        ge=0,
+        description="Tokens of overlap between adjacent chunks (preserves cross-chunk context).",
+    )
+
     # ─── Convenience accessors ────────────────────────────
     @property
     def has_gemini(self) -> bool:

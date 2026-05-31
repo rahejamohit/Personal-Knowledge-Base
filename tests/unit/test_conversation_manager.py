@@ -95,13 +95,17 @@ class TestMultiTurnContext:
         settings = Settings(_env_file=None)  # type: ignore[call-arg]
         mgr = ConversationManager(agent=agent, settings=settings)
 
-        for i in range(5):
+        # Six calls so the final one (i=5) has five prior turns to choose
+        # from, and PKA_HISTORY_TURNS=2 truncates that to turns 4 and 5
+        # (messages "msg 3" and "msg 4").
+        for i in range(6):
             mgr.process_turn(f"msg {i}")
 
         # The 6th call's history should only include the last 2 prior turns.
         last_history = agent.calls[-1][1]
         assert "msg 0" not in last_history
         assert "msg 1" not in last_history
+        assert "msg 2" not in last_history
         assert "msg 3" in last_history
         assert "msg 4" in last_history
 
