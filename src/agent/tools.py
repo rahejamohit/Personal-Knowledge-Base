@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from crewai.tools import BaseTool, tool
@@ -93,6 +94,16 @@ def _retrieved_for_agent(doc: RetrievedDoc) -> dict[str, Any]:
     }
 
 
+def _run_sync(coro: Any) -> Any:
+    """Run coroutine from sync code, including when an event loop already exists."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(asyncio.run, coro).result()
+
+
 @tool("retrieve")
 def tool_retrieve(query: str, top_k: int = 5) -> str:
     """Search the user's knowledge base for documents relevant to a question.
@@ -110,11 +121,7 @@ def tool_retrieve(query: str, top_k: int = 5) -> str:
     Returns:
         JSON-encoded list of retrieved documents.
     """
-    # `asyncio.run` is safe because CrewAI's `crew.kickoff()` calls tools
-    # from a synchronous context. If a future caller invokes tools from
-    # within a running event loop, switch this to `asyncio.to_thread` or
-    # a `run_until_complete` on a dedicated loop.
-    docs = asyncio.run(retrieve(query=query, top_k=top_k))
+    docs = _run_sync(retrieve(query=query, top_k=top_k))
     return json.dumps([_retrieved_for_agent(d) for d in docs])
 
 
@@ -134,7 +141,7 @@ def tool_cite(chunk_id: str, excerpt: str = "") -> str:
     """
     # `excerpt=""` means "no excerpt"; we normalize to `None` before
     # calling the async core so the stub's branch is exercised correctly.
-    return asyncio.run(cite(chunk_id=chunk_id, excerpt=excerpt or None))
+    return _run_sync(cite(chunk_id=chunk_id, excerpt=excerpt or None))
 
 
 # ─── Tool registry ────────────────────────────────────────────────────────

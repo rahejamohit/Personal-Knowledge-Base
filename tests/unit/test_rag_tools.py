@@ -28,7 +28,6 @@ from src.agent.tools import (
     tool_retrieve,
 )
 
-
 # ─── Async core: retrieve ────────────────────────────────────────────────
 
 
@@ -101,6 +100,12 @@ class TestToolRetrieveWrapper:
     def test_tool_has_correct_name(self) -> None:
         assert tool_retrieve.name == "retrieve"
 
+    @pytest.mark.asyncio
+    async def test_works_inside_running_event_loop(self) -> None:
+        output = tool_retrieve.run(query="hi", top_k=3)
+        parsed = json.loads(output)
+        assert parsed == []
+
 
 class TestToolCiteWrapper:
     def test_returns_placeholder_string(self) -> None:
@@ -110,6 +115,12 @@ class TestToolCiteWrapper:
 
     def test_tool_has_correct_name(self) -> None:
         assert tool_cite.name == "cite"
+
+    @pytest.mark.asyncio
+    async def test_works_inside_running_event_loop(self) -> None:
+        out = tool_cite.run(chunk_id="doc_X")
+        assert isinstance(out, str)
+        assert "citation:" in out and "doc_X" in out
 
 
 # ─── Registry ────────────────────────────────────────────────────────────
