@@ -20,9 +20,11 @@ our async core, and to shape the JSON the LLM ultimately reads.
 from __future__ import annotations
 
 import asyncio
+import atexit
 import json
+from collections.abc import Coroutine
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from typing import Any, TypeVar
 
 from crewai.tools import BaseTool, tool
 
@@ -30,6 +32,9 @@ from src.models.document import DocumentChunk, RetrievedDoc  # noqa: F401 (re-ex
 from src.utils import get_logger
 
 logger = get_logger(__name__)
+_async_bridge_executor = ThreadPoolExecutor(max_workers=1)
+atexit.register(_async_bridge_executor.shutdown, wait=False, cancel_futures=True)
+_T = TypeVar("_T")
 
 
 # ─── Pure async tool implementations ─────────────────────────────────────
@@ -94,14 +99,13 @@ def _retrieved_for_agent(doc: RetrievedDoc) -> dict[str, Any]:
     }
 
 
-def _run_sync(coro: Any) -> Any:
+def _run_sync(coro: Coroutine[Any, Any, _T]) -> _T:
     """Run coroutine from sync code, including when an event loop already exists."""
     try:
         asyncio.get_running_loop()
     except RuntimeError:
         return asyncio.run(coro)
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        return executor.submit(asyncio.run, coro).result()
+    return _async_bridge_executor.submit(asyncio.run, coro).result()
 
 
 @tool("retrieve")
