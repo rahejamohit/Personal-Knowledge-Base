@@ -39,6 +39,8 @@ htmlcov/
 sessions.db
 chroma_db/
 data/
+.data/
+.chroma/
 
 # ─── Logs ─────────────────────────────────────────────────
 *.log

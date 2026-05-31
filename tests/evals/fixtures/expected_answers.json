@@ -1,0 +1,65 @@
+{
+  "_comment": "Reference answers for the corresponding TEST_CASES in tests/evals/test_cases.py. Indexed by `query` so the eval harness can match without ordering assumptions. The `answer` field is a model answer (~3 sentences) that a perfect agent should produce; `must_contain` is the strict pass criteria (matches TestCase.expected_answer_contains for now, but kept separately so it can diverge in Phase 1.7a).",
+  "cases": {
+    "What is RAG?": {
+      "answer": "Retrieval-Augmented Generation (RAG) is a technique that combines a retrieval system with a generative language model. The retriever fetches relevant documents from a knowledge base; the LLM produces an answer grounded in those documents. The pattern was formalized in Lewis et al. 2020 and is now the default for production LLM apps over evolving or proprietary corpora.",
+      "must_contain": ["retrieval", "augmented", "generation"],
+      "sources": ["rag_guide.md"]
+    },
+    "How do vector embeddings work?": {
+      "answer": "A vector embedding is a fixed-length list of floats produced by a neural network from a piece of text. Semantically similar inputs land near each other in the resulting high-dimensional space; the network learns this property during training. To compare two pieces of text, you embed both and measure the cosine similarity (or Euclidean distance) between their vectors.",
+      "must_contain": ["vector", "dimension", "similarity"],
+      "sources": ["embeddings_explained.md"]
+    },
+    "What is cosine similarity?": {
+      "answer": "Cosine similarity is the cosine of the angle between two vectors. It ranges from -1 (opposite directions) to 1 (identical direction) and ignores vector magnitude. It's the default metric for text-embedding similarity because text embeddings encode 'what about' rather than 'how much of'.",
+      "must_contain": ["cosine", "angle", "between"],
+      "sources": ["embeddings_explained.md", "vector_db_comparison.md"]
+    },
+    "What problem does RAG solve in LLMs?": {
+      "answer": "RAG solves three failure modes of pure generative LLMs: knowledge cutoff (the model doesn't know about data after training), hallucination (the model invents plausible-sounding wrong answers), and lack of provenance (there's no source the user can verify). Inserting a retrieval step grounds the answer in real source material and lets the model cite where each fact came from.",
+      "must_contain": ["knowledge", "hallucination", "context"],
+      "sources": ["rag_guide.md"]
+    },
+    "Compare Chroma and Pinecone as vector databases": {
+      "answer": "Chroma is an open-source in-process vector DB that runs locally and costs $0 — great for prototypes and single-user apps, scales to about 5M vectors. Pinecone is a managed cloud service that scales to billions of vectors with strong metadata filtering and a generous free tier, but adds network latency and monthly cost. The query APIs are similar enough that migration between them is a small change in the storage abstraction.",
+      "must_contain": ["chroma", "pinecone"],
+      "sources": ["vector_db_comparison.md"]
+    },
+    "Do I need an API key to run this locally?": {
+      "answer": "No. The default configuration uses Ollama for both chat and embeddings, which runs entirely on your laptop. API keys are only needed if you flip LLM_PROVIDER or EMBEDDING_PROVIDER to gemini or openai in your .env file.",
+      "must_contain": ["no", "ollama", "local"],
+      "sources": ["faq.md"]
+    },
+    "How much does it cost to use the agent?": {
+      "answer": "In Phase 1 with the default Ollama configuration, the cost is $0 — everything runs locally with no API calls. You only pay if you switch to Gemini or OpenAI for higher-quality responses, and even then the per-query cost is typically under a tenth of a cent.",
+      "must_contain": ["free", "phase 1", "cost"],
+      "sources": ["faq.md"]
+    },
+    "Where are my documents stored?": {
+      "answer": "All documents and conversation history are stored on your local disk. The vector index lives in .chroma/ (a Chroma-managed directory of SQLite files) and conversation history lives in .data/sessions.db. Both directories are gitignored and never sent to any external service in the default Ollama configuration.",
+      "must_contain": ["local", "chroma", "disk"],
+      "sources": ["faq.md"]
+    },
+    "How do RAG systems use vector embeddings and which DB stores them?": {
+      "answer": "A RAG system embeds each document chunk during ingestion and stores the resulting vectors in a vector database (Chroma for local Phase-1 setups, Pinecone or Qdrant for larger scale). At query time, the question is embedded with the same model and the database returns the top-k most similar chunks via cosine similarity, which the LLM then uses to ground its answer.",
+      "must_contain": ["embedding", "vector", "retrieval"],
+      "sources": ["rag_guide.md", "embeddings_explained.md", "vector_db_comparison.md"]
+    },
+    "Explain prompt engineering and how it relates to multi-agent systems": {
+      "answer": "Prompt engineering is the discipline of shaping LLM inputs (system message, history, current message) to get reliable outputs. In a multi-agent system, each agent has its own focused prompt — the retrieval agent's prompt is about search, the answer agent's is about synthesis. This per-agent specialization is itself a prompt-engineering technique: narrower prompts produce more reliable behavior than one generalist prompt.",
+      "must_contain": ["prompt", "agent"],
+      "sources": ["prompt_engineering.txt", "agent_systems.md"]
+    },
+    "What is the weather today in Tokyo?": {
+      "answer": "I don't know — none of the documents in the knowledge base contain weather information. You'd need a real-time weather tool for that question; this agent only answers from indexed documents.",
+      "must_contain": ["don't know", "no", "documents"],
+      "sources": []
+    },
+    "thing": {
+      "answer": "Could you clarify what you'd like to know about? Your message is just 'thing' — give me a specific question or topic and I'll search the indexed documents for an answer.",
+      "must_contain": ["clarify", "specific", "?"],
+      "sources": []
+    }
+  }
+}

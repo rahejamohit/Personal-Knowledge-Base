@@ -1,0 +1,64 @@
+Personal Research Notes — RAG + Agents
+
+
+2026-04-12
+
+Spent the morning tuning chunk size. Started at 256 tokens, tried 512,
+ended at 768. Going from 256 to 512 noticeably improved retrieval —
+fewer chunks where the answer is technically present but the
+surrounding context is missing. Going from 512 to 768 didn't seem to
+help much and made the top-k results longer than they needed to be.
+Sticking with 512 for now.
+
+
+2026-04-15
+
+Question of the week: when should the agent decline to answer?
+
+Right now the system prompt says "if the retrieved documents don't
+contain the answer, say so explicitly". This works most of the time
+but the model is too eager — even when the docs DO contain the
+answer, if it's not phrased exactly the way the question is, the
+model says "I don't know". Lowering the threshold means more
+hallucinations. The right answer is probably reranking + confidence
+scoring; that's a Phase 2 problem.
+
+
+2026-04-20
+
+Notes from re-reading the original RAG paper (Lewis et al., 2020):
+
+- They used a Wikipedia dump as the corpus and DPR (dense passage
+  retrieval) as the retriever. Both choices look quaint now — modern
+  systems use general-purpose embedding models that weren't trained
+  specifically on retrieval data.
+- The "RAG-Sequence" variant retrieves once and uses the same docs
+  for every output token. The "RAG-Token" variant re-retrieves at
+  each step. Production systems almost universally use RAG-Sequence
+  because per-token retrieval is expensive and rarely improves
+  quality.
+- The paper's headline result was that RAG beats a closed-book LM on
+  knowledge-intensive tasks. The interesting result for engineers is
+  that the retrieval quality dominated the final answer quality —
+  better embeddings beat a bigger LLM in every ablation.
+
+
+2026-05-03
+
+Things I want to test in the next eval pass:
+
+1. Does reranking help? (Cohere rerank-v3 vs no rerank)
+2. Does query expansion help? (Reformulate "What's X?" into 3 paraphrases)
+3. Does the model improve when we feed it the SECTION (h2 header) of
+   each retrieved chunk along with the text?
+
+Hypothesis: #3 is the biggest win and #1 is overrated for personal-
+sized corpora.
+
+
+2026-05-18
+
+Personal observation: when the corpus is small (< 100 docs), the
+choice of embedding model matters far less than I expected. Even a
+naive bag-of-words retriever scores well. The real value of dense
+embeddings shows up at corpus size > 10k where lexical overlap fails.

@@ -1,5 +1,7 @@
 # Personal Knowledge Agent
 
+[![Tests](https://github.com/rahejamohit/Personal-Knowledge-Base/actions/workflows/test.yml/badge.svg)](https://github.com/rahejamohit/Personal-Knowledge-Base/actions/workflows/test.yml)
+
 A multi-turn conversational agent that answers questions about your personal
 documents with citations, persistent memory, and a CrewAI multi-agent
 backbone powered by Gemini 2.0 Flash.
@@ -100,6 +102,116 @@ adds disk-backed session storage so context survives restarts.
 uv run pytest                       # unit tests only by default
 uv run pytest -m integration        # hits real APIs (needs .env)
 uv run pytest --cov=src             # coverage
+```
+
+### Testing strategy
+
+```
+        🔺 Eval tests (~10%)         tests/evals/
+       ├─ Quality metrics (recall, accuracy, citations)
+       └─ Full pipeline against 12 curated test cases
+
+      🔻 Integration tests (~20%)    tests/integration/
+     ├─ End-to-end CrewAI run against real Gemini
+     └─ SessionManager round-trips, vector store persistence
+
+   📦 Unit tests (~70%)              tests/unit/
+  ├─ Data models, settings, conversation manager
+  ├─ Vector store ops (upsert / search / delete)
+  └─ Agent + RAG tool stubs
+```
+
+Unit tests run on every push (GitHub Actions). Integration tests are
+gated by `-m integration` and require live API keys. Eval tests run
+manually pre-release to score retrieval quality on the
+[sample corpus](tests/evals/fixtures/sample_docs/).
+
+## Embeddings
+
+The agent has two pluggable embedding paths, switched by
+`EMBEDDING_PROVIDER` in `.env`:
+
+| Phase | Provider | Model | Dims | Cost | Speed (laptop) |
+|-------|----------|-------|------|------|----------------|
+| Phase 1 (default) | Ollama | `nomic-embed-text` | 768 | $0 | ~500 chunks/sec on CPU |
+| Phase 2+ | OpenAI | `text-embedding-3-small` | 1536 | $0.02 / 1M tokens | ~5000 chunks/sec (API) |
+
+```bash
+# Phase 1 setup
+ollama pull nomic-embed-text     # ~270 MB
+# Phase 2+ setup
+echo "EMBEDDING_PROVIDER=openai" >> .env
+echo "OPENAI_API_KEY=sk-..."     >> .env
+```
+
+**Switching embedding models invalidates the index** — Chroma stores
+vectors at a fixed dimension, and similarity scoring breaks if you
+mix models. After flipping `EMBEDDING_PROVIDER`, `rm -rf .chroma/`
+and re-ingest.
+
+## API costs
+
+### Phase 1 — local-only ($0 / month)
+
+| Component | Cost |
+|-----------|------|
+| Ollama LLM (`mistral`) | $0 |
+| Ollama embeddings (`nomic-embed-text`) | $0 |
+| Chroma vector DB | $0 (local disk) |
+| SQLite session store | $0 (local disk) |
+
+**Phase 1 total: $0.** Once the two Ollama models are pulled, no
+network calls are made.
+
+### Phase 2+ — managed providers (estimated)
+
+| Component | Approx. cost |
+|-----------|--------------|
+| Gemini 2.0 Flash (chat) | ~$0.001 / query, 1500 req/day free tier |
+| OpenAI `text-embedding-3-small` | $0.02 / 1M input tokens (~$0.0001 / 1K) |
+| Pinecone (starter index) | Free tier ≤ 1M vectors, then ~$0.025 / GB-mo |
+| Managed Postgres (session DB) | ~$15–50 / month, if you outgrow SQLite |
+
+**Phase 2+ working estimate: $0–100 / month** depending on traffic and
+which providers you enable. The provider selector supports mixing
+(e.g. local Ollama chat + cloud OpenAI embeddings for better recall).
+
+## Verification commands
+
+Quick health checks for what's wired up today. Each exits non-zero on
+failure, so they're safe to chain in a setup script.
+
+```bash
+# 1. Settings parse + provider config
+uv run python -c "from src.config import get_settings; \
+  s = get_settings(); print(f'OK config — llm={s.llm_provider!r}, emb={s.embedding_provider!r}')"
+
+# 2. Data models import + Phase-1 schema
+uv run python -c "from src.models.document import DocumentChunk, RetrievedDoc; \
+  from src.models.conversation import ConversationTurn, TokenUsage; print('OK models')"
+
+# 3. Ingestion loaders / chunker stubs resolve
+uv run python -c "from src.ingestion import get_loader, recursive_split, CHUNK_SIZE; \
+  print(f'OK ingestion — chunk_size={CHUNK_SIZE}, loader for .md is {type(get_loader(\"x.md\")).__name__}')"
+
+# 4. Vector store boots and reports stats
+uv run python -c "from src.storage.vector_store import ChromaVectorStore; \
+  import tempfile, asyncio; \
+  s = ChromaVectorStore(persist_dir=tempfile.mkdtemp()); \
+  print('OK vector store —', asyncio.run(s.get_stats()))"
+
+# 5. SessionManager opens its DB + creates a row
+uv run python -c "from src.storage.db import SessionManager; \
+  import tempfile, asyncio, os; \
+  m = SessionManager(db_path=os.path.join(tempfile.mkdtemp(), 'sessions.db')); \
+  sid = asyncio.run(m.create_session('alice')); print('OK session manager —', sid)"
+
+# 6. RAG tool stubs callable
+uv run python -c "import asyncio; from src.agent.tools import retrieve, cite; \
+  print('OK tools —', asyncio.run(retrieve('test')), asyncio.run(cite('c1')))"
+
+# 7. External APIs reachable (only if Gemini / OpenAI keys set in .env)
+uv run python scripts/verify_apis.py
 ```
 
 ## What's next (Phase 1)
