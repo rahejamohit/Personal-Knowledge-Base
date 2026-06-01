@@ -1,0 +1,73 @@
+Prompt Engineering — Field Notes
+
+
+WHAT IS A PROMPT?
+
+A prompt is the input you give to a large language model. In practice
+it has three parts: a system message (who the model is, what it
+should do), conversation history (what's been said), and the current
+user message. The model sees all three concatenated together and
+predicts the next tokens. Prompt engineering is the discipline of
+shaping these inputs to get reliable, high-quality outputs.
+
+
+WHY DOES IT MATTER?
+
+Two prompts that ask the same question can produce wildly different
+answers from the same model. A prompt that says "answer briefly"
+gets a one-sentence reply; one that says "answer in detail" gets a
+five-paragraph essay. A prompt that says "if you don't know, say so"
+reduces hallucinations dramatically. A prompt that gives examples of
+the desired output format gets that exact format back. None of this
+requires retraining the model — it's purely a function of the input.
+
+
+CORE TECHNIQUES
+
+1. System message. Put the agent's role, constraints, and style
+   guidelines in the system message rather than the user message.
+   The model treats system messages as more authoritative and is less
+   likely to override them.
+
+2. Few-shot examples. Show the model two or three examples of the
+   input/output pattern you want. This works better than describing
+   the pattern in words, especially for structured outputs.
+
+3. Chain-of-thought. Ask the model to "think step by step" before
+   answering. For reasoning tasks, this measurably improves accuracy.
+   For factual lookups, it's wasteful.
+
+4. Tool use. Instead of asking the model to do something it's bad at
+   (arithmetic, lookups, fresh data), give it a tool that does that
+   thing and let it call the tool. Tool use is what turns a chat
+   model into an agent.
+
+5. Constraints. Tell the model what NOT to do explicitly. "Do not
+   speculate beyond the provided documents" is more effective than
+   "be accurate".
+
+
+AGENT SYSTEMS AND PROMPTS
+
+In a multi-agent system, each agent has its own prompt. The
+retrieval agent's prompt is focused on search — it doesn't get told
+"answer the user's question". The answer agent's prompt is focused
+on synthesis — it doesn't get told "search for documents". This
+separation of concerns at the prompt level mirrors the separation of
+concerns at the system level. Each agent stays in its lane because
+its prompt doesn't tempt it out of it.
+
+When debugging a multi-agent system, look at each agent's prompt
+independently. Most "the agents are confused" failures turn out to
+be one specific agent's prompt being ambiguous, not a coordination
+problem.
+
+
+COMMON ANTI-PATTERNS
+
+- Asking the model to do too much in one prompt. If you need three
+  different things, use three different prompts (or three agents).
+- Hiding constraints in the user message. The model sees a wall of
+  text and ignores half of it. Put constraints in the system message.
+- Over-engineering. Most good prompts are five sentences. If yours
+  is three paragraphs, you probably have a different problem.
