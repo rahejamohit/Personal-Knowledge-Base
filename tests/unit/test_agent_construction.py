@@ -51,39 +51,43 @@ class TestToolRegistry:
             assert t.description, f"tool {name!r} has empty description"
 
 
+class _StubAgent:
+    """Records constructor kwargs as attributes — substitute for CrewAI's
+    `Agent` in wiring-only tests.
+
+    Why we stub `Agent` itself rather than `LLM`: CrewAI's `LLM` and
+    `Agent` are Pydantic models with provider-probing in their init
+    machinery. Patching just `LLM.__init__` doesn't reliably bypass the
+    Pydantic-driven validation chain. Replacing `Agent` outright gives
+    us a deterministic, no-import-side-effect path through
+    `KnowledgeAgents.__init__`, and the tests' assertions
+    (`.role`, `.tools`) still work because we mirror the kwargs onto
+    `self`.
+    """
+
+    def __init__(self, **kwargs: object) -> None:
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+
 class TestKnowledgeAgents:
     @pytest.fixture(autouse=True)
-    def _stub_llm_init(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Bypass CrewAI's real `LLM.__init__` for these wiring-only tests.
+    def _stub_crewai_construction(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Patch `src.agent.agents` so `KnowledgeAgents.__init__` never
+        reaches CrewAI's eager provider-probing code paths.
 
-        Why a method patch rather than replacing the whole class:
-        CrewAI's `Agent` is a Pydantic model that validates `llm` is a
-        true `crewai.LLM` instance. Replacing the class would fail that
-        validation. Patching only `__init__` keeps the class identity
-        (and thus Pydantic's validator) happy while skipping the eager
-        provider probing that fails with `errno 2` in some envs.
+        Two replacements:
 
-        The replacement records the args on `self` so the test can still
-        inspect what `_build_llm` was constructed with if needed.
+        * `_build_llm` → sentinel-returning lambda. We don't construct
+          CrewAI's real `LLM`, so its `errno 2` probe never fires.
+        * `Agent` → `_StubAgent`. Construction becomes a pure
+          kwargs-record, but the tests can still read `.role` and
+          `.tools` exactly the way they would on a real agent.
         """
-
-        def _noop_init(
-            self: object,
-            model: str = "",
-            api_key: str = "",
-            temperature: float = 0.0,
-            **_: object,
-        ) -> None:
-            object.__setattr__(self, "model", model)
-            object.__setattr__(self, "api_key", api_key)
-            object.__setattr__(self, "temperature", temperature)
-
-        # Patch via the same import path agents.py uses, so we hit the
-        # right class object regardless of how CrewAI internally re-
-        # exports `LLM`.
         from src.agent import agents as agents_mod
 
-        monkeypatch.setattr(agents_mod.LLM, "__init__", _noop_init)
+        monkeypatch.setattr(agents_mod, "_build_llm", lambda _settings: object())
+        monkeypatch.setattr(agents_mod, "Agent", _StubAgent)
 
     def test_constructs_both_agents_with_tools(self) -> None:
         tools = build_default_tools()
