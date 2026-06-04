@@ -31,6 +31,18 @@ dependencies = [
     # REST API (Phase 0 web layer)
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
+    # Phase 1.1 ingestion: PDF reading, DOCX read/write, and reportlab so
+    # test fixtures can synthesize PDFs without external binaries.
+    "pypdf>=3.17.0",
+    "python-docx>=0.8.11",
+    "reportlab>=4.0.0",
+    # Phase 1.1 OCR (scanned PDFs). Python bindings only — the system
+    # binaries `tesseract` and `poppler` must be installed separately:
+    #   macOS:  brew install tesseract poppler
+    #   Linux:  apt-get install tesseract-ocr poppler-utils
+    "pytesseract>=0.3.10",
+    "pdf2image>=1.16.3",
+    "Pillow>=10.0.0",
     # Logging
     "python-json-logger>=2.0.7",
     # Env loading

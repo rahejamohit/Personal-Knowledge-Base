@@ -37,15 +37,21 @@ config, and a working CrewAI agent loop with a CLI you can talk to.
 # 1. Install uv (one-time)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# 2. Create venv + install deps from pyproject.toml
+# 2. Install system binaries for scanned-PDF OCR (Phase 1.1)
+#    macOS:  brew install tesseract poppler
+#    Linux:  apt-get install tesseract-ocr poppler-utils
+#    These are only needed if you ingest scanned (image-only) PDFs.
+#    Pure-text PDFs / Markdown / TXT / DOCX work without them.
+
+# 3. Create venv + install deps from pyproject.toml
 uv sync --extra dev
 
-# 3. Config
+# 4. Config
 cp env.example .env       # then edit .env with real API keys
 #  - GOOGLE_API_KEY  → https://aistudio.google.com/app/apikey
 #  - OPENAI_API_KEY  → https://platform.openai.com/api-keys
 
-# 4. Verify both APIs work
+# 5. Verify both APIs work
 uv run python scripts/verify_apis.py
 ```
 

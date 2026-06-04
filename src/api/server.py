@@ -72,6 +72,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Phase 1.1 debug ingestion endpoint. Mounted here rather than in the
+# ingestion module so the `app` object stays the single source of truth
+# for what's exposed in production. Keep this commented out before
+# shipping to real users — it leaks internal chunker details.
+from src.api.ingestion import router as ingestion_router  # noqa: E402
+
+app.include_router(ingestion_router)
+
 # ─── In-memory session registry (Phase 0) ─────────────────────────────────
 
 # Maps session_id -> ConversationManager. Lost on process restart.

@@ -16,8 +16,21 @@ from src.config import Settings
 
 
 def _test_settings() -> Settings:
-    """Settings with a placeholder Gemini key (no calls actually made)."""
-    return Settings(_env_file=None, google_api_key="test-key")  # type: ignore[call-arg]
+    """Settings used by the agent-construction tests.
+
+    We pin `llm_provider="gemini"` explicitly. Why: the project's default
+    `llm_provider` is `"ollama"`, which causes CrewAI/LiteLLM to probe for
+    a local Ollama binary at `LLM(...)` construction time — that probe
+    fails in CI (no Ollama installed), surfacing as a cryptic
+    "ImportError: Error importing native provider". Pinning to `"gemini"`
+    keeps construction inert until first .invoke(), which we don't reach
+    in these wiring-only tests.
+    """
+    return Settings(  # type: ignore[call-arg]
+        _env_file=None,
+        llm_provider="gemini",
+        google_api_key="test-key",
+    )
 
 
 class TestToolRegistry:
@@ -39,6 +52,39 @@ class TestToolRegistry:
 
 
 class TestKnowledgeAgents:
+    @pytest.fixture(autouse=True)
+    def _stub_llm_init(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Bypass CrewAI's real `LLM.__init__` for these wiring-only tests.
+
+        Why a method patch rather than replacing the whole class:
+        CrewAI's `Agent` is a Pydantic model that validates `llm` is a
+        true `crewai.LLM` instance. Replacing the class would fail that
+        validation. Patching only `__init__` keeps the class identity
+        (and thus Pydantic's validator) happy while skipping the eager
+        provider probing that fails with `errno 2` in some envs.
+
+        The replacement records the args on `self` so the test can still
+        inspect what `_build_llm` was constructed with if needed.
+        """
+
+        def _noop_init(
+            self: object,
+            model: str = "",
+            api_key: str = "",
+            temperature: float = 0.0,
+            **_: object,
+        ) -> None:
+            object.__setattr__(self, "model", model)
+            object.__setattr__(self, "api_key", api_key)
+            object.__setattr__(self, "temperature", temperature)
+
+        # Patch via the same import path agents.py uses, so we hit the
+        # right class object regardless of how CrewAI internally re-
+        # exports `LLM`.
+        from src.agent import agents as agents_mod
+
+        monkeypatch.setattr(agents_mod.LLM, "__init__", _noop_init)
+
     def test_constructs_both_agents_with_tools(self) -> None:
         tools = build_default_tools()
         agents = KnowledgeAgents(tools, settings=_test_settings())
