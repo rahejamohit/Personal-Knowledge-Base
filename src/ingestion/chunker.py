@@ -308,7 +308,7 @@ async def chunk_document(
 
     prose, code_blocks = _extract_code_blocks(text)
     logger.info("chunk_document: extracted %d code blocks for source=%s", len(code_blocks), source)
-    logger.info("chunk_document: extracted prose %s", prose)
+    logger.debug("chunk_document: prose length=%d chars", len(prose))
     raw_chunks = await _recursive_split(prose, chunk_size=chunk_size, overlap=overlap)
     restored = [_restore_code_blocks(c, code_blocks) for c in raw_chunks]
 
