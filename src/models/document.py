@@ -36,12 +36,16 @@ class DocumentMetadata(BaseModel):
     def to_chroma_metadata(self) -> dict[str, Any]:
         """Flatten to a Chroma-compatible dict (only scalar values).
 
-        Chroma rejects nested dicts and non-scalar values, so we coerce
-        datetimes to ISO strings and drop `None`s.
+        Delegates to `ChunkSchema.validate_metadata`, the single source of
+        truth for Chroma's metadata contract: datetimes become ISO strings,
+        `None`s are dropped, scalars are kept as-is, and any non-scalar
+        value raises `TypeError` (rather than being silently dropped).
         """
-        raw = self.model_dump(mode="json", exclude_none=True)
-        # `model_dump(mode="json")` already converts datetimes to ISO strings.
-        return {k: v for k, v in raw.items() if isinstance(v, (str, int, float, bool))}
+        # Imported lazily: schema.py type-checks against this module, so a
+        # top-level import here would be a cycle at first load.
+        from src.storage.schema import ChunkSchema
+
+        return ChunkSchema.validate_metadata(self.model_dump())
 
 
 class DocumentChunk(BaseModel):

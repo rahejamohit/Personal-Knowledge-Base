@@ -40,6 +40,7 @@ from chromadb.config import Settings as ChromaSettings
 
 from src.models.conversation import RetrievedDoc
 from src.models.document import DocumentChunk
+from src.storage.schema import ChunkSchema
 from src.utils import get_logger
 
 logger = get_logger(__name__)
@@ -217,14 +218,14 @@ class ChromaVectorStore:
     def _chunk_metadata(chunk: DocumentChunk) -> dict[str, Any]:
         """Flatten a chunk's metadata into something Chroma will accept.
 
-        Chroma's metadata column only stores scalars (str/int/float/bool),
-        so we ride on `DocumentMetadata.to_chroma_metadata()` and tack on
-        the fields the search step needs (`doc_id`, `chunk_index`).
+        Delegates to `ChunkSchema.chunk_to_chroma_format` — the single
+        source of truth for the chunk→Chroma mapping — and pulls out the
+        metadata dict (validated scalars + `doc_id`/`chunk_index`). A
+        non-scalar metadata value raises `TypeError` here, before the
+        `add`/`upsert` call reaches Chroma.
         """
-        meta = chunk.metadata.to_chroma_metadata()
-        meta["doc_id"] = chunk.doc_id
-        meta["chunk_index"] = chunk.chunk_index
-        return meta
+        metadata: dict[str, Any] = ChunkSchema.chunk_to_chroma_format(chunk)["metadata"]
+        return metadata
 
 
 def _distance_to_similarity(distance: float) -> float:

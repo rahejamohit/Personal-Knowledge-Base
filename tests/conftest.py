@@ -17,12 +17,15 @@ Two autouse fixtures live here:
 
 from __future__ import annotations
 
+import hashlib
+import math
+import re
 from pathlib import Path
 
 import pytest
 
 from src.config import settings as settings_module
-
+from src.providers.base import EmbeddingProvider
 
 # ─── Settings cache reset (function-scoped, autouse) ─────────────────────
 
@@ -210,3 +213,67 @@ def _generate_scanned_pdf(path: Path) -> None:
     c.drawImage(ImageReader(buf), 0, 0, width=612, height=792)
     c.showPage()
     c.save()
+
+
+# ─── Fake embedding provider (hermetic tests) ────────────────────────────
+
+
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+class FakeEmbedder(EmbeddingProvider):
+    """Deterministic, dependency-free embedding provider for tests.
+
+    Implements the `EmbeddingProvider` ABC so it's a drop-in replacement for
+    the real OpenAI/Gemini/Ollama providers, but needs no API key and makes
+    no network calls — which keeps the storage/ingest tests hermetic.
+
+    It's a normalized hashing bag-of-words vectorizer: each lowercased
+    token is hashed (stably, via MD5) into one of `dim` buckets and the
+    resulting count vector is L2-normalized. That gives two useful
+    properties for testing the *store* and *pipeline* rather than the
+    embedder:
+
+    * **Deterministic** across runs and processes (no `PYTHONHASHSEED`
+      dependence), so assertions are stable.
+    * **Lexically meaningful** — texts that share words land closer in
+      cosine space, so a "retrieval-augmented generation" query ranks a
+      RAG chunk above an unrelated one. That lets ranking tests run
+      without a real embedding model.
+    """
+
+    def __init__(self, dim: int = 64) -> None:
+        self._dim = dim
+
+    def _vectorize(self, text: str) -> list[float]:
+        vec = [0.0] * self._dim
+        for token in _TOKEN_RE.findall(text.lower()):
+            bucket = int(hashlib.md5(token.encode()).hexdigest(), 16) % self._dim
+            vec[bucket] += 1.0
+        norm = math.sqrt(sum(x * x for x in vec))
+        if norm == 0.0:
+            # Empty/punctuation-only text → a fixed unit vector so Chroma
+            # still gets a consistent dimension and never an all-zero vec.
+            vec[0] = 1.0
+            return vec
+        return [x / norm for x in vec]
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._vectorize(text)
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [self._vectorize(t) for t in texts]
+
+    @property
+    def embedding_dimension(self) -> int:
+        return self._dim
+
+    @property
+    def model_name(self) -> str:
+        return f"fake-embedder-{self._dim}d"
+
+
+@pytest.fixture
+def fake_embedder() -> FakeEmbedder:
+    """A `FakeEmbedder` instance for hermetic embedding/ingest tests."""
+    return FakeEmbedder()

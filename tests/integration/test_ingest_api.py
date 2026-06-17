@@ -1,15 +1,15 @@
 """Integration tests for `POST /api/internal/debug/documents/ingest`.
 
-Exercises the full Phase 1.1 pipeline through FastAPI's `TestClient`:
-loader factory → loader → chunker → response shaping. No real network
-or LLM calls. Sample documents come from the on-disk fixtures (see
-`tests/conftest.py` for the binary autogen).
+Exercises the full Phase 1.1 + 1.2 pipeline through FastAPI's
+`TestClient`: loader factory → loader → chunker → embed → store →
+response shaping.
 
-Why these are `tests/integration/` rather than `tests/unit/`: they
-exercise the cross-module wiring (server → router → ingestion module
-→ loaders → chunker), not any single unit. They still run fast and
-don't hit external services, so we don't put them behind the
-`integration` marker — the path placement is the only gate.
+Hermetic by construction: the endpoint's embedding provider and vector
+store are FastAPI dependencies, so this module overrides them with a
+`FakeEmbedder` (no API key, no network) and a throwaway `tmp_path` Chroma
+dir (no writes to the real index). The cross-module *wiring* is what's
+under test, not any real embedding model — so these stay out of the
+`integration` marker and the path placement is the only gate.
 """
 
 from __future__ import annotations
@@ -19,18 +19,31 @@ from collections.abc import Iterator
 import pytest
 from fastapi.testclient import TestClient
 
+from src.api.ingestion import get_embedder, get_vector_store
 from src.api.server import app
-
+from src.storage.vector_store import ChromaVectorStore
+from tests.conftest import FakeEmbedder
 
 # ─── Test client fixture ─────────────────────────────────────────────────
 
 
 @pytest.fixture(scope="module")
-def client() -> Iterator[TestClient]:
-    """One `TestClient` per module — cheap to share since the app is
-    stateless for ingestion (no per-test session state involved)."""
-    with TestClient(app) as c:
-        yield c
+def client(tmp_path_factory: pytest.TempPathFactory) -> Iterator[TestClient]:
+    """One `TestClient` per module, wired to a fake embedder + tmp Chroma.
+
+    Overriding the two pipeline dependencies keeps the suite hermetic: no
+    API key needed and the real on-disk index is never touched.
+    """
+    chroma_dir = tmp_path_factory.mktemp("ingest_api_chroma")
+    app.dependency_overrides[get_embedder] = FakeEmbedder
+    app.dependency_overrides[get_vector_store] = lambda: ChromaVectorStore(
+        collection_name="documents", persist_dir=chroma_dir
+    )
+    try:
+        with TestClient(app) as c:
+            yield c
+    finally:
+        app.dependency_overrides.clear()
 
 
 # ─── Markdown happy path ─────────────────────────────────────────────────
@@ -59,6 +72,29 @@ def test_ingest_markdown_returns_200_with_chunks(client: TestClient) -> None:
     assert chunk["metadata"]["content_type"] == "text/markdown"
 
 
+def test_ingest_returns_embeddings_and_store_confirmation(client: TestClient) -> None:
+    """Phase 1.2: the response carries one embedding per chunk and a
+    vector-store confirmation that everything was stored."""
+    response = client.post(
+        "/api/internal/debug/documents/ingest",
+        json={"file_path": "tests/evals/fixtures/sample_docs/rag_guide.md"},
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+
+    n_chunks = len(data["chunks"])
+    # One embedding vector per chunk, all the embedder's dimension.
+    assert len(data["embeddings"]) == n_chunks
+    dim = data["vector_store"]["embedding_dimension"]
+    assert all(len(vec) == dim for vec in data["embeddings"])
+
+    vs = data["vector_store"]
+    assert vs["collection"] == "documents"
+    assert vs["chunks_stored"] == n_chunks
+    assert vs["embedding_model"] == "fake-embedder-64d"
+    assert vs["persist_dir"]
+
+
 def test_ingest_stats_block(client: TestClient) -> None:
     response = client.post(
         "/api/internal/debug/documents/ingest",
@@ -72,8 +108,9 @@ def test_ingest_stats_block(client: TestClient) -> None:
     # Token counts add up.
     chunks = response.json()["chunks"]
     assert stats["total_tokens"] == sum(c["token_count"] for c in chunks)
-    # Latency reported, non-negative.
-    assert stats["processing_time_ms"] >= 0
+    # Per-stage + total latency reported, all non-negative.
+    for key in ("load_time_ms", "chunk_time_ms", "embed_store_time_ms", "total_time_ms"):
+        assert stats[key] >= 0
 
 
 # ─── PDF (uses autogen fixture) ──────────────────────────────────────────
