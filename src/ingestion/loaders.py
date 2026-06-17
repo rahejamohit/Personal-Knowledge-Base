@@ -24,6 +24,7 @@ import asyncio
 import re
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import Any
 
 from src.utils import get_logger
 
@@ -67,6 +68,48 @@ class DocumentLoader(ABC):
 # artifacts; 50 chars is the safe threshold from the spec. Hoisted to a
 # module constant so it's tunable without touching the body.
 _OCR_FALLBACK_THRESHOLD: int = 50
+
+
+# Shared, actionable hint for both OCR paths. OCR needs the Python packages
+# *and* their system binaries — missing either should produce the same
+# guidance rather than a cryptic `ImportError` (no package) or
+# `FileNotFoundError` (no binary).
+_OCR_RUNTIME_HINT = (
+    "OCR requires the pytesseract + pdf2image Python packages AND their "
+    "system binaries (tesseract, poppler). Install packages with `uv sync` "
+    "and binaries: `brew install tesseract poppler` on macOS, "
+    "`apt-get install tesseract-ocr poppler-utils` on Linux."
+)
+
+
+def _import_ocr_stack() -> tuple[Any, Any, tuple[type[Exception], ...]]:
+    """Import the OCR stack, raising a helpful `ImportError` if it's absent.
+
+    Returns ``(pytesseract, convert_from_path, runtime_missing_errors)`` —
+    the last being the exception types that signal a missing *binary*
+    (poppler / tesseract not on PATH), which callers translate into the
+    same `ImportError` as a missing package.
+    """
+    try:
+        import pytesseract
+        from pdf2image import convert_from_path
+        from pdf2image.exceptions import (
+            PDFInfoNotInstalledError,
+            PopplerNotInstalledError,
+        )
+    except ImportError as e:
+        raise ImportError(f"{_OCR_RUNTIME_HINT} ({e})") from e
+
+    # A missing binary surfaces as a raw `FileNotFoundError` from the
+    # subprocess (e.g. `pdfinfo`), pdf2image's poppler errors, or
+    # pytesseract's `TesseractNotFoundError`.
+    runtime_missing: tuple[type[Exception], ...] = (
+        FileNotFoundError,
+        PDFInfoNotInstalledError,
+        PopplerNotInstalledError,
+        pytesseract.TesseractNotFoundError,
+    )
+    return pytesseract, convert_from_path, runtime_missing
 
 
 # ─── PDF ─────────────────────────────────────────────────────────────────
@@ -173,24 +216,20 @@ class PDFLoader(DocumentLoader):
 
     def _ocr_single_page(self, p: Path, page_idx: int) -> str:
         """OCR exactly one page of `p`. Lazy-imports the OCR stack."""
-        try:
-            import pytesseract
-            from pdf2image import convert_from_path
-        except ImportError as e:
-            raise ImportError(
-                "OCR fallback requires pytesseract and pdf2image. "
-                "Install Python packages with `uv sync` and the system "
-                "binaries: `brew install tesseract poppler` on macOS, "
-                f"`apt-get install tesseract-ocr poppler-utils` on Linux. ({e})"
-            ) from e
+        pytesseract, convert_from_path, runtime_missing = _import_ocr_stack()
 
-        # pdf2image is 1-indexed.
-        images = convert_from_path(
-            str(p), first_page=page_idx + 1, last_page=page_idx + 1
-        )
-        if not images:
-            return ""
-        return pytesseract.image_to_string(images[0], lang=self.ocr_language)
+        try:
+            # pdf2image is 1-indexed.
+            images = convert_from_path(
+                str(p), first_page=page_idx + 1, last_page=page_idx + 1
+            )
+            if not images:
+                return ""
+            text: str = pytesseract.image_to_string(images[0], lang=self.ocr_language)
+            return text
+        except runtime_missing as e:
+            # Packages import fine but a binary (poppler/tesseract) is absent.
+            raise ImportError(f"{_OCR_RUNTIME_HINT} ({e})") from e
 
 
 # ─── Scanned PDF (OCR-only) ──────────────────────────────────────────────
@@ -233,31 +272,26 @@ class ScannedPDFLoader(DocumentLoader):
         return blocks
 
     def _read_sync(self, p: Path) -> list[str]:
-        try:
-            import pytesseract
-            from pdf2image import convert_from_path
-        except ImportError as e:
-            raise ImportError(
-                "ScannedPDFLoader requires pytesseract and pdf2image. "
-                "Install Python packages with `uv sync` and the system "
-                "binaries: `brew install tesseract poppler` on macOS, "
-                f"`apt-get install tesseract-ocr poppler-utils` on Linux. ({e})"
-            ) from e
+        pytesseract, convert_from_path, runtime_missing = _import_ocr_stack()
 
-        images = convert_from_path(str(p))  # batch — all pages at once
         blocks: list[str] = []
-        for page_idx, image in enumerate(images):
-            text = pytesseract.image_to_string(image, lang=self.ocr_language).strip()
-            logger.debug(
-                "ScannedPDFLoader page %d → %d chars", page_idx + 1, len(text)
-            )
-            if not text:
-                blocks.append("")
-                continue
-            if len(text) > _PDF_PAGE_SOFT_LIMIT:
-                blocks.extend(part for part in text.split("\n\n") if part.strip())
-            else:
-                blocks.append(text)
+        try:
+            images = convert_from_path(str(p))  # batch — all pages at once
+            for page_idx, image in enumerate(images):
+                text = pytesseract.image_to_string(image, lang=self.ocr_language).strip()
+                logger.debug(
+                    "ScannedPDFLoader page %d → %d chars", page_idx + 1, len(text)
+                )
+                if not text:
+                    blocks.append("")
+                    continue
+                if len(text) > _PDF_PAGE_SOFT_LIMIT:
+                    blocks.extend(part for part in text.split("\n\n") if part.strip())
+                else:
+                    blocks.append(text)
+        except runtime_missing as e:
+            # Packages import fine but a binary (poppler/tesseract) is absent.
+            raise ImportError(f"{_OCR_RUNTIME_HINT} ({e})") from e
         return blocks
 
 
