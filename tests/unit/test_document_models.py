@@ -4,7 +4,6 @@ These tests focus on what's *new* in Phase 1:
 * `DocumentChunk.created_at` auto-population.
 * `RetrievedDoc.metadata` and `RetrievedDoc.similarity_score` property.
 * The re-export path `from src.models.document import RetrievedDoc`.
-* `ConversationTurn.retrieved_docs` can roundtrip with the new fields.
 
 The Phase 0 model tests in `test_models.py` already cover the rest of
 the schema, so we don't duplicate them here.
@@ -18,7 +17,7 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import ValidationError
 
-from src.models.conversation import ConversationTurn, RetrievedDoc
+from src.models.conversation import RetrievedDoc
 from src.models.document import DocumentChunk, DocumentMetadata
 from src.models.document import RetrievedDoc as ReExportedRetrievedDoc
 
@@ -107,46 +106,3 @@ class TestRetrievedDocPhase1:
         # The spec asks callers to import from `src.models.document`, so
         # the re-export must point to the same class object (not a copy).
         assert ReExportedRetrievedDoc is RetrievedDoc
-
-
-class TestConversationTurnHoldsRetrievedDocs:
-    def test_retrieved_docs_default_empty(self) -> None:
-        turn = ConversationTurn(
-            id="turn_1",
-            session_id="sess_1",
-            turn_number=1,
-            user_message="hi",
-            agent_response="hi back",
-        )
-        assert turn.retrieved_docs == []
-
-    def test_round_trip_with_retrieved_docs(self) -> None:
-        turn = ConversationTurn(
-            id="turn_1",
-            session_id="sess_1",
-            turn_number=1,
-            user_message="what is RAG?",
-            agent_response="...",
-            retrieved_docs=[
-                RetrievedDoc(
-                    chunk_id="c1",
-                    doc_id="d1",
-                    source="rag.md",
-                    text="excerpt",
-                    score=0.91,
-                    rank=0,
-                    metadata={"section": "Intro"},
-                ),
-                RetrievedDoc(
-                    chunk_id="c2",
-                    doc_id="d1",
-                    source="rag.md",
-                    text="another excerpt",
-                    score=0.84,
-                    rank=1,
-                ),
-            ],
-        )
-        restored = ConversationTurn.model_validate_json(turn.model_dump_json())
-        assert restored == turn
-        assert restored.retrieved_docs[0].metadata == {"section": "Intro"}

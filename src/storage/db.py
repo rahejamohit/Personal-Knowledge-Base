@@ -60,7 +60,6 @@ CREATE TABLE IF NOT EXISTS conversation_turns (
     turn_number     INTEGER NOT NULL,
     user_message    TEXT NOT NULL,
     agent_response  TEXT NOT NULL,
-    retrieved_docs  TEXT NOT NULL DEFAULT '[]',
     tool_calls      TEXT NOT NULL DEFAULT '[]',
     tool_results    TEXT NOT NULL DEFAULT '[]',
     token_usage     TEXT NOT NULL DEFAULT '{}',
@@ -135,16 +134,15 @@ class SessionManager:
                 self._conn.execute(
                     "INSERT INTO conversation_turns "
                     "(id, session_id, turn_number, user_message, agent_response, "
-                    " retrieved_docs, tool_calls, tool_results, token_usage, "
+                    " tool_calls, tool_results, token_usage, "
                     " metadata, timestamp) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         turn.id,
                         session_id,
                         turn.turn_number,
                         turn.user_message,
                         turn.agent_response,
-                        json.dumps(payload["retrieved_docs"]),
                         json.dumps(payload["tool_calls"]),
                         json.dumps(payload["tool_results"]),
                         json.dumps(payload["token_usage"]),

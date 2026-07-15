@@ -16,7 +16,6 @@ from threading import Thread
 import pytest
 
 from src.models.conversation import ConversationTurn, TokenUsage
-from src.models.conversation import RetrievedDoc
 from src.storage.db import SessionManager
 
 
@@ -81,32 +80,6 @@ class TestSaveAndLoad:
 
         loaded = await mgr.load_session(sid)
         assert loaded is not None
-        assert loaded["turn_count"] == 1
-
-    async def test_save_turn_round_trips_retrieved_docs(self, mgr: SessionManager) -> None:
-        # The riskiest serialization in the turn payload — nested model
-        # → JSON column → JSON.loads-able dict on read.
-        sid = await mgr.create_session("alice")
-        turn = ConversationTurn(
-            id="turn_1",
-            session_id=sid,
-            turn_number=1,
-            user_message="q",
-            agent_response="a",
-            retrieved_docs=[
-                RetrievedDoc(
-                    chunk_id="c1",
-                    doc_id="d1",
-                    source="paper.pdf",
-                    text="excerpt",
-                    score=0.9,
-                    rank=0,
-                    metadata={"page": 3},
-                )
-            ],
-        )
-        await mgr.save_turn(sid, turn)
-        loaded = await mgr.load_session(sid)
         assert loaded["turn_count"] == 1
 
     async def test_load_session_returns_none_for_missing(self, mgr: SessionManager) -> None:

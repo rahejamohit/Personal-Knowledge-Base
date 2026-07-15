@@ -27,30 +27,32 @@ from src.agent.tools import (
     tool_cite,
     tool_retrieve,
 )
+from src.models.conversation import RetrievedDoc
+
+# `retrieve` is `async def`, so `mocker.patch` auto-creates an AsyncMock —
+# `return_value=<list>` is what the awaited coroutine resolves to, which is
+# exactly what `_run_sync(retrieve(...))` hands the wrapper.
+
 
 # ─── Async core: retrieve ────────────────────────────────────────────────
+#
+# The Phase 1.3 implementation is exercised in depth (reranking, relevance,
+# failure modes) by `tests/unit/test_retrieve.py`, which injects a fake
+# embedder + throwaway store. Here we only pin the contract that the CrewAI
+# wrapper relies on: a blank query short-circuits to `[]` without ever
+# touching an embedding provider or the index (so it's network-free).
 
 
-class TestRetrieveAsyncStub:
+class TestRetrieveContract:
     @pytest.mark.asyncio
-    async def test_returns_empty_list(self) -> None:
-        results = await retrieve("What is RAG?", top_k=5)
+    async def test_empty_query_returns_empty(self) -> None:
+        results = await retrieve("")
         assert results == []
         assert isinstance(results, list)
 
     @pytest.mark.asyncio
-    async def test_default_top_k_is_5(self) -> None:
-        # Stub returns [] regardless, but the signature should accept the
-        # one-positional-arg form without raising.
-        results = await retrieve("hi")
-        assert results == []
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("top_k", [1, 5, 10])
-    async def test_accepts_valid_top_k_range(self, top_k: int) -> None:
-        # Phase 0 stub doesn't validate; this just confirms the signature
-        # accepts the documented range without surprise.
-        results = await retrieve("test", top_k=top_k)
+    async def test_whitespace_query_returns_empty(self) -> None:
+        results = await retrieve("   \t\n ")
         assert results == []
 
 
@@ -88,23 +90,44 @@ class TestCiteAsyncStub:
 
 
 class TestToolRetrieveWrapper:
-    def test_returns_valid_json(self) -> None:
-        # `tool_retrieve` is a CrewAI tool object; invoke its `.run` method
-        # the same way CrewAI would when the agent picks the tool.
+    """The CrewAI sync wrapper bridges to the async core and shapes JSON.
+
+    We patch the async `retrieve` so these assert the *wrapper's* behavior
+    (sync bridging + JSON shape) deterministically, independent of whether
+    an embedding provider or index is reachable.
+    """
+
+    def test_returns_valid_json_array(self, mocker) -> None:
+        mocker.patch("src.agent.tools.retrieve", return_value=[])
         output = tool_retrieve.run(query="hi", top_k=3)
-        parsed = json.loads(output)
-        assert isinstance(parsed, list)
-        # Phase 0 stub: empty list → empty JSON array.
-        assert parsed == []
+        assert json.loads(output) == []
+
+    def test_shapes_results_with_similarity_score_key(self, mocker) -> None:
+        doc = RetrievedDoc(
+            chunk_id="c_1",
+            doc_id="d_1",
+            source="notes.md",
+            text="some retrieved text",
+            score=0.83,
+            rank=0,
+            metadata={"page": 2},
+        )
+        mocker.patch("src.agent.tools.retrieve", return_value=[doc])
+        parsed = json.loads(tool_retrieve.run(query="hi", top_k=3))
+        assert len(parsed) == 1
+        # The agent sees `score` under the `similarity_score` key per the spec.
+        assert parsed[0]["similarity_score"] == 0.83
+        assert parsed[0]["chunk_id"] == "c_1"
+        assert parsed[0]["metadata"] == {"page": 2}
 
     def test_tool_has_correct_name(self) -> None:
         assert tool_retrieve.name == "retrieve"
 
     @pytest.mark.asyncio
-    async def test_works_inside_running_event_loop(self) -> None:
+    async def test_works_inside_running_event_loop(self, mocker) -> None:
+        mocker.patch("src.agent.tools.retrieve", return_value=[])
         output = tool_retrieve.run(query="hi", top_k=3)
-        parsed = json.loads(output)
-        assert parsed == []
+        assert json.loads(output) == []
 
 
 class TestToolCiteWrapper:

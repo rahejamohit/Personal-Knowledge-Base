@@ -76,7 +76,10 @@ class KnowledgeAgent:
 
         usage = _extract_usage(crew)
         logger.info("Crew finished: tokens=%s", usage.total_tokens)
-        return AgentRunResult(answer=answer_text.strip(), token_usage=usage)
+        return AgentRunResult(
+            answer=answer_text.strip(),
+            token_usage=usage,
+        )
 
 
 def _extract_usage(crew: Crew) -> TokenUsage:

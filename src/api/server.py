@@ -168,7 +168,6 @@ def _turn_to_response(turn: ConversationTurn) -> TurnResponse:
         turn_number=turn.turn_number,
         user_message=turn.user_message,
         agent_response=turn.agent_response,
-        retrieved_docs=turn.retrieved_docs,
         token_usage=turn.token_usage,
         timestamp=turn.timestamp,
         metadata=turn.metadata,

@@ -20,7 +20,6 @@ from src.models import (
     DocumentChunk,
     DocumentMetadata,
     MemorySummary,
-    RetrievedDoc,
     Session,
     TokenUsage,
     ToolCall,
@@ -113,16 +112,6 @@ class TestConversationModels:
             turn_number=1,
             user_message="What is RAG?",
             agent_response="Retrieval-Augmented Generation is...",
-            retrieved_docs=[
-                RetrievedDoc(
-                    chunk_id="c1",
-                    doc_id="d1",
-                    source="rag_paper.pdf",
-                    text="RAG combines retrieval with generation.",
-                    score=0.91,
-                    rank=0,
-                ),
-            ],
             tool_calls=[ToolCall(tool_name="retrieve", arguments={"query": "RAG"})],
             tool_results=[
                 ToolResult(tool_name="retrieve", output={"n": 1}, latency_ms=42.0),

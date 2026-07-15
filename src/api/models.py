@@ -75,7 +75,6 @@ class TurnResponse(BaseModel):
     turn_number: int
     user_message: str
     agent_response: str
-    retrieved_docs: list[RetrievedDoc] = Field(default_factory=list)
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
     timestamp: datetime
     metadata: dict[str, Any] = Field(default_factory=dict)

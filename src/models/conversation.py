@@ -115,7 +115,6 @@ class ConversationTurn(BaseModel):
     turn_number: int = Field(..., ge=1, description="1-indexed turn within the session.")
     user_message: str
     agent_response: str
-    retrieved_docs: list[RetrievedDoc] = Field(default_factory=list)
     tool_calls: list[ToolCall] = Field(default_factory=list)
     tool_results: list[ToolResult] = Field(default_factory=list)
     token_usage: TokenUsage = Field(default_factory=TokenUsage)

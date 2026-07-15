@@ -38,6 +38,7 @@ from typing import Any
 import chromadb
 from chromadb.config import Settings as ChromaSettings
 
+from src.config import get_settings
 from src.models.conversation import RetrievedDoc
 from src.models.document import DocumentChunk
 from src.storage.schema import ChunkSchema
@@ -60,9 +61,12 @@ class ChromaVectorStore:
     def __init__(
         self,
         collection_name: str = "documents",
-        persist_dir: str | Path = ".chroma",
+        persist_dir: str | Path = None,
     ) -> None:
         self._collection_name = collection_name
+        if persist_dir is None:
+            # Use configured directory instead of hardcoded default
+            persist_dir = get_settings().pka_chroma_dir
         self._persist_dir = Path(persist_dir)
         self._persist_dir.mkdir(parents=True, exist_ok=True)
 
